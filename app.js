@@ -5,9 +5,9 @@ const express = require('express');
 const parser = require('body-parser');
 const ejs = require('ejs');
 const path = require('path');
+const bcrypt = require('bcrypt');
 
 const mongoose = require('mongoose');
-const encrypt = require('mongoose-encryption');
 mongoose.connect('mongodb://127.0.0.1:27017/userDB');
 
 const app = express();
@@ -26,9 +26,6 @@ const userSchema = new mongoose.Schema({
     password: String
 });
 
-const secret = process.env.SECRET_KEY;
-userSchema.plugin(encrypt, {secret: secret, encryptedFields: ["password"]});
-
 const User = mongoose.model("User", userSchema);
 
 app.route('/')
@@ -45,11 +42,16 @@ app.route('/login')
         User.findOne({
             email: req.body.username,
         }).then(doc => {
-            console.log(doc)
-            if (doc != null && doc.password === req.body.password) {
-                res.render('secrets');
+            if (doc != null) {
+                bcrypt.compare(req.body.password, doc.password).then(async function(result) {
+                    if (result === true) {
+                        res.render('secrets');
+                    } else {
+                        res.send("Password you entered is wrong!");
+                    }
+                });
             } else {
-                res.send("Username/Password you entered is wrong!");
+                res.send("There is no user registered with this email/usrname");
             }
         }).catch(err => {
             console.log("Error: " +err);
@@ -62,18 +64,22 @@ app.route('/register')
         res.render('register');
     })
     .post(async function(req, res) {
-        new User({
-            email: req.body.username,
-            password: req.body.password
-        }).save()
-            .then(doc => {
-                console.log(doc);
-                res.render('secrets');
+        bcrypt.hash(req.body.password, Number(process.env.SALT_LEVEL))
+            .then(async function(result) {
+                new User({
+                    email: req.body.username,
+                    password: result
+                })
+                .save()
+                .then(doc => {
+                    console.log(doc);
+                    res.render('secrets');
+                })
+                .catch(err => {
+                    console.log("Some error occured! Error: " + err);
+                    res.send("Error occured while adding user: " + err);
+                });
             })
-            .catch(err => {
-                console.log("Some error occured! Error: " + err);
-                res.send("Error occured while adding user: " + err);
-            });
     })
 
 
