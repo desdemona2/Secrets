@@ -5,10 +5,12 @@ const express = require('express');
 const parser = require('body-parser');
 const ejs = require('ejs');
 const path = require('path');
-const bcrypt = require('bcrypt');
+
+const session = require('express-session');
+const passport = require('passport');
+const passportLocalMongoose = require('passport-local-mongoose');
 
 const mongoose = require('mongoose');
-mongoose.connect('mongodb://127.0.0.1:27017/userDB');
 
 const app = express();
 
@@ -21,12 +23,36 @@ app.set('view engine', 'ejs');
 // To parse url encoded response from post request
 app.use(parser.urlencoded({extended: true}));
 
+
+// Create a session middleware
+app.use(session({
+    secret: process.env.SECRET_KEY,
+    resave: false,
+    saveUninitialized: false
+}));
+
+// initialize the passport module
+app.use(passport.initialize());
+
+// set passport to be used with session.
+app.use(passport.session());
+
+mongoose.connect('mongodb://127.0.0.1:27017/userDB');
+
+
 const userSchema = new mongoose.Schema({
     email: String,
     password: String
 });
 
+userSchema.plugin(passportLocalMongoose);
+
 const User = mongoose.model("User", userSchema);
+
+passport.use(User.createStrategy());
+
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
 
 app.route('/')
     .get(async function(req, res) {
@@ -36,52 +62,66 @@ app.route('/')
 
 app.route('/login')
     .get(async function(req, res) {
-        res.render('login');
+        if (req.isAuthenticated()) {
+            res.redirect('/secrets');
+        } else {
+            res.render('login');
+        }
     })
     .post(async function(req, res) {
-        User.findOne({
-            email: req.body.username,
-        }).then(doc => {
-            if (doc != null) {
-                bcrypt.compare(req.body.password, doc.password).then(async function(result) {
-                    if (result === true) {
-                        res.render('secrets');
-                    } else {
-                        res.send("Password you entered is wrong!");
-                    }
-                });
+        const user = new User({
+            username: req.body.username,
+            password: req.body.password
+        })
+
+        req.login(user, function(err, user) {
+            if (err) {
+                console.log("Some Error occured: " + err);
+                res.redirect('/login')
             } else {
-                res.send("There is no user registered with this email/usrname");
+                passport.authenticate("local")(req, res, function() {
+                    res.redirect('/secrets');
+                });
             }
-        }).catch(err => {
-            console.log("Error: " +err);
-            res.send("Some error occured while finding your record!")
-        });
+        })
     })
+
+app.get('/secrets', function(req, res) {
+    if (req.isAuthenticated()) {
+        res.render('secrets');
+    } else {
+        res.redirect('/login');
+    }
+});
 
 app.route('/register')
     .get(async function(req, res) {
         res.render('register');
     })
     .post(async function(req, res) {
-        bcrypt.hash(req.body.password, Number(process.env.SALT_LEVEL))
-            .then(async function(result) {
-                new User({
-                    email: req.body.username,
-                    password: result
+        // register method is defined in passport-local-mongoose
+        User.register({username: req.body.username}, req.body.password, function(err, user) {
+            if (err) {
+                console.log("Error occured: " + err);
+                res.redirect('/register');
+            } else {
+                passport.authenticate("local", { failureRedirect: '/login', failureMessage: true })(req, res, function() {
+                    res.redirect('/secrets');
                 })
-                .save()
-                .then(doc => {
-                    console.log(doc);
-                    res.render('secrets');
-                })
-                .catch(err => {
-                    console.log("Some error occured! Error: " + err);
-                    res.send("Error occured while adding user: " + err);
-                });
-            })
+            }
+        })
     })
 
+app.get('/logout', function(req, res) {
+    req.logout(function(err) {
+        if (err) {
+            console.log("Some Error occured: " + err);
+            res.redirect('/');
+        } else {
+            res.redirect('/');
+        }
+    });
+});
 
 app.listen(5400, function() {
     console.log("server started on port 5400");
